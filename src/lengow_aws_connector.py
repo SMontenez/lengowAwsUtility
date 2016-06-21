@@ -1,3 +1,5 @@
+from datetime import date, timedelta
+import json
 import os
 import requests
 
@@ -26,6 +28,8 @@ not_allowed_marketplaces = ["amazon"]
 
 order_comment = """ Merci pour votre commande. Pour les retours, veuillez prendre contact avec nous
                     et retourner le produit dans son emballage d'origine"""
+
+fulfilled_orders_filename = "data/fulfilled_orders.json"
 
 
 def get_orders_from_lengow(
@@ -93,7 +97,7 @@ def preview_aws_shipment(order):
     return mws_shipments.make_request(data, "POST")
 
 
-def create_aws_order(lengow_order):
+def create_aws_order(lengow_order, order_id):
     """
     Process the data returned by Lengow api, to adapat it for the AWS CreateFulfillmentOrder.
     """
@@ -105,9 +109,6 @@ def create_aws_order(lengow_order):
     # Data that will be sent to AWS CreateFulfillmentOrder method
     aws_order_data = {}
 
-    # Unique ID for this order
-    order_id = "{marketplace}_{order_id}".format(
-        marketplace=lengow_order["marketplace"], order_id=lengow_order["order_id"])
     aws_order_data["SellerFulfillmentOrderId"] = order_id
     aws_order_data["DisplayableOrderId"] = order_id
 
@@ -176,3 +177,36 @@ def cancel_aws_order(order_id):
 
     data = dict(Action="CancelFulfillmentOrder", SellerFulfillmentOrderId=order_id)
     return mws_shipments.make_request(data, "POST")
+
+
+def fulfill_lengow_orders(start_date, end_date):
+    """
+    Get orders to fulfill from Lengow API, and fulfill them via AWS CreateFulfillmentOrder endpoint
+    when they aren"t already fulfilled.
+    """
+    # Get the ids if orders already fulfilled
+    with open(fulfilled_orders_filename, "r") as file:
+        already_fulfilled_orders = json.load(file)
+
+    lengow_orders = get_orders_from_lengow(start_date, end_date)["orders"]
+    for order in lengow_orders:
+        # Unique ID for this order
+        order_id = "{marketplace}_{order_id}".format(
+            marketplace=order["marketplace"], order_id=order["order_id"])
+        if order_id in already_fulfilled_orders:
+            continue
+        else:
+            already_fulfilled_orders.append(order_id)
+            create_aws_order(order, order_id)
+
+    # Write the ids of the fulfilled orders
+    with open(fulfilled_orders_filename, "w") as file:
+        json.dump(file, already_fulfilled_orders)
+
+
+if __name__ == "__main__":
+
+    start_date = date.today() - timedelta(days=1)
+    end_date = date.today()
+
+    fulfill_lengow_orders(start_date, end_date)
